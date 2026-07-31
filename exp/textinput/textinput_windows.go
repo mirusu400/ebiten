@@ -253,18 +253,26 @@ func (t *textInput) update() (ferr error) {
 	if err != nil {
 		return err
 	}
+	// An IME can report no attributes. Hangul IMEs always do, as there is
+	// nothing to convert, and indexing the empty buffer would panic.
 	attr := make([]byte, attrLen)
-	if _, err := _ImmGetCompositionStringW(hIMC, _GCS_COMPATTR, unsafe.Pointer(&attr[0]), attrLen); err != nil {
-		return err
+	if len(attr) > 0 {
+		if _, err := _ImmGetCompositionStringW(hIMC, _GCS_COMPATTR, unsafe.Pointer(&attr[0]), attrLen); err != nil {
+			return err
+		}
 	}
 
 	clauseLen, err := _ImmGetCompositionStringW(hIMC, _GCS_COMPCLAUSE, nil, 0)
 	if err != nil {
 		return err
 	}
+	// Likewise for clauses: a Hangul composition is one unsegmented run, so
+	// the clause buffer comes back empty.
 	clause := make([]uint32, clauseLen/uint32(unsafe.Sizeof(uint32(0))))
-	if _, err := _ImmGetCompositionStringW(hIMC, _GCS_COMPCLAUSE, unsafe.Pointer(&clause[0]), clauseLen); err != nil {
-		return err
+	if len(clause) > 0 {
+		if _, err := _ImmGetCompositionStringW(hIMC, _GCS_COMPCLAUSE, unsafe.Pointer(&clause[0]), clauseLen); err != nil {
+			return err
+		}
 	}
 
 	var start16 int
