@@ -135,29 +135,29 @@ func ebitengine_textinput_firstRectForCharacterRange(self C.uintptr_t, crange C.
 
 type textInput struct {
 	// session must be accessed from the main thread.
-	session *session
+	session session
 }
 
 var theTextInput textInput
 
 func (t *textInput) Start(bounds image.Rectangle) (<-chan textInputState, func()) {
+	var ch <-chan textInputState
+	var end func()
 	ui.Get().RunOnMainThread(func() {
-		t.start(bounds)
+		ch, end = t.start(bounds)
 	})
-	return t.session.ch, t.session.end
+	return ch, end
 }
 
 func (t *textInput) update(text string, startInBytes, endInBytes int, deleteStartInBytes, deleteEndInBytes int, committed bool) {
-	if t.session != nil {
-		t.session.trySend(textInputState{
-			Text:                             text,
-			CompositionSelectionStartInBytes: startInBytes,
-			CompositionSelectionEndInBytes:   endInBytes,
-			DeleteStartInBytes:               deleteStartInBytes,
-			DeleteEndInBytes:                 deleteEndInBytes,
-			Committed:                        committed,
-		})
-	}
+	t.session.send(textInputState{
+		Text:                             text,
+		CompositionSelectionStartInBytes: startInBytes,
+		CompositionSelectionEndInBytes:   endInBytes,
+		DeleteStartInBytes:               deleteStartInBytes,
+		DeleteEndInBytes:                 deleteEndInBytes,
+		Committed:                        committed,
+	})
 	if committed {
 		t.endIfNeeded()
 	}
@@ -169,11 +169,7 @@ func ebitengine_textinput_end() {
 }
 
 func (t *textInput) endIfNeeded() {
-	if t.session == nil {
-		return
-	}
 	t.session.end()
-	t.session = nil
 }
 
 var (
@@ -217,7 +213,7 @@ type nsRect struct {
 	size   nsSize
 }
 
-func (t *textInput) start(bounds image.Rectangle) {
+func (t *textInput) start(bounds image.Rectangle) (<-chan textInputState, func()) {
 	t.endIfNeeded()
 
 	tc := getTextInputClient()
@@ -236,6 +232,5 @@ func (t *textInput) start(bounds image.Rectangle) {
 		size:   nsSize{float64(bounds.Dx()), float64(bounds.Dy())},
 	})
 
-	session := newSession()
-	t.session = session
+	return t.session.start()
 }
