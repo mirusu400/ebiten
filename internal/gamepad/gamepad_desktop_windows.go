@@ -106,6 +106,7 @@ type nativeGamepadsDesktop struct {
 	procDirectInput8Create    uintptr
 	procXInputGetCapabilities uintptr
 	procXInputGetState        uintptr
+	procXInputSetState        uintptr
 
 	origWndProc         uintptr
 	wndProcCallback     uintptr
@@ -168,6 +169,14 @@ func (g *nativeGamepadsDesktop) init(gamepads *gamepads) error {
 					return err
 				}
 				g.procXInputGetState = p
+			}
+			{
+				// XInputSetState drives the rumble motors. It is optional: an
+				// older DLL that lacks it leaves vibration a silent no-op rather
+				// than failing gamepad support outright.
+				if p, err := windows.GetProcAddress(h, "XInputSetState"); err == nil {
+					g.procXInputSetState = p
+				}
 			}
 			break
 		}
@@ -280,7 +289,8 @@ func (g *nativeGamepadsDesktop) detectConnection(gamepads *gamepads) error {
 
 			gp := gamepads.add(name, sdlID)
 			gp.native = &nativeGamepadDesktop{
-				xinputIndex: i,
+				xinputIndex:    i,
+				xinputSetState: g.procXInputSetState,
 			}
 		}
 	}
@@ -608,6 +618,10 @@ type nativeGamepadDesktop struct {
 
 	xinputIndex int
 	xinputState _XINPUT_STATE
+	// xinputSetState is copied from the owning nativeGamepadsDesktop so an XInput
+	// pad can drive its rumble motors without a back-reference. Zero for a
+	// DirectInput device, which has no wired-up force feedback.
+	xinputSetState uintptr
 }
 
 func (*nativeGamepadDesktop) hasOwnStandardLayoutMapping() bool {
@@ -847,5 +861,28 @@ func (g *nativeGamepadDesktop) hatState(hat int) int {
 }
 
 func (g *nativeGamepadDesktop) vibrate(duration time.Duration, strongMagnitude float64, weakMagnitude float64) {
-	// TODO: Implement this (#1452)
+	// Only XInput controllers expose rumble motors here; DirectInput force
+	// feedback is not wired up, so a DInput-only pad ignores the request. XInput
+	// vibration is state-based and holds until changed, so the caller re-issues
+	// while active and sends zero magnitudes to stop; duration is unused.
+	if g.usesDInput() || g.xinputSetState == 0 {
+		return
+	}
+	clamp := func(v float64) uint16 {
+		switch {
+		case v <= 0:
+			return 0
+		case v >= 1:
+			return 0xffff
+		default:
+			return uint16(v * 0xffff)
+		}
+	}
+	vibration := _XINPUT_VIBRATION{
+		wLeftMotorSpeed:  clamp(strongMagnitude),
+		wRightMotorSpeed: clamp(weakMagnitude),
+	}
+	// Best effort: a disconnected pad returns an error we cannot act on.
+	_, _, _ = syscall.Syscall(g.xinputSetState, 2,
+		uintptr(g.xinputIndex), uintptr(unsafe.Pointer(&vibration)), 0)
 }
