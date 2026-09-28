@@ -58,6 +58,7 @@ type noWindowSystemBackend struct {
 	monitor *Monitor
 
 	inputState InputState
+	keyboard   *evdevKeyboard
 
 	mu sync.Mutex
 }
@@ -175,6 +176,18 @@ func (b *noWindowSystemBackend) initOnMainThread(options *RunOptions) (err error
 
 	b.setRunningBackend(b)
 
+	b.keyboard = startEvdevKeyboard(func(key Key, pressed bool) {
+		b.mu.Lock()
+		t := b.inputState.nextInputTime()
+		if pressed {
+			b.inputState.setKeyPressed(key, t)
+		} else {
+			b.inputState.setKeyReleased(key, t)
+		}
+		b.mu.Unlock()
+		b.ScheduleFrame()
+	})
+
 	// Ask for the first frame. In FPSModeVsyncOffMinimum the game loop waits
 	// for a request, and a display without a window system raises no event that would stand
 	// in for one, so nothing else would ever ask.
@@ -185,6 +198,10 @@ func (b *noWindowSystemBackend) initOnMainThread(options *RunOptions) (err error
 
 func (b *noWindowSystemBackend) loopGame() (err error) {
 	defer func() {
+		if b.keyboard != nil {
+			b.keyboard.close()
+			b.keyboard = nil
+		}
 		graphicscommand.Terminate()
 		closeErr := thread.CallWithArgAndResult(b.mainThread, func(b *noWindowSystemBackend) error {
 			defer b.setTerminated()
